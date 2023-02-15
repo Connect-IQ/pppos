@@ -678,11 +678,9 @@ static void mgos_pppos_dispatch_once(struct mgos_pppos_data *pd) {
                     (apn ? apn : "")));
       mbuf_remove(&pd->data, pd->data.len);
       add_cmd(pd, mgos_pppos_at_cb, 0, "AT");
-      add_cmd(pd, NULL, 0, "ATH");
-      add_cmd(pd, NULL, 0, "ATE0");
-      if (mgos_sys_config_get_pppos_cfun_cycle()) {
-        add_cmd(pd, NULL, 0, "AT+CFUN=0"); /* Offline */
-      }
+      // add_cmd(pd, NULL, 0, "ATH");//ROZLACZA POLACZENIA
+      add_cmd(pd, NULL, 0, "ATE0");//ECHO disable
+
       if (!pd->baud_ok) {
         struct mgos_uart_config ucfg;
         bool need_ifr = true, need_ifc = true;
@@ -692,45 +690,62 @@ static void mgos_pppos_dispatch_once(struct mgos_pppos_data *pd) {
               (pd->cfg->fc_enable != (ucfg.baud_rate == MGOS_UART_FC_HW));
         }
         if (need_ifr) {
-          add_cmd(pd, mgos_pppos_ifr_cb, 0, "AT+IPR=%d", pd->cfg->baud_rate);
+          add_cmd(pd, mgos_pppos_ifr_cb, 0, "AT+IPR=%d", pd->cfg->baud_rate); //CHANGE BAUDRATE
         }
         if (need_ifc) {
           int ifc = (pd->cfg->fc_enable ? 2 : 0);
-          add_cmd(pd, mgos_pppos_ifc_cb, 0, "AT+IFC=%d,%d", ifc, ifc);
+          add_cmd(pd, mgos_pppos_ifc_cb, 0, "AT+IFC=%d,%d", ifc, ifc);//CHANGE FLOW CONTROL
         }
       }
-      add_cmd(pd, NULL, 0, "AT+CFUN=1"); /* Full functionality */
-      add_cmd(pd, mgos_pppos_ati_cb, 0, "ATI");
-      add_cmd(pd, mgos_pppos_gsn_cb, 0, "AT+GSN");
-      add_cmd(pd, mgos_pppos_cimi_cb, 0, "AT+CIMI");
-      add_cmd(pd, mgos_pppos_ccid_cb, 0, "AT+CCID");
-      add_cmd(pd, mgos_pppos_cpin_cb, 0, "AT+CPIN?");
-      add_cmd(pd, NULL, 0, "AT+%s=0", reg_cmd); /* No unsolicited reports */
+      
+      add_cmd(pd, mgos_pppos_ati_cb, 0, "ATI");//Request modem information
+      add_cmd(pd, mgos_pppos_gsn_cb, 0, "AT+GSN");//Request IMEI
+      add_cmd(pd, mgos_pppos_cimi_cb, 0, "AT+CIMI");//Request IMSI
+      add_cmd(pd, mgos_pppos_ccid_cb, 0, "AT+CCID");//Request ICCID ??
+      add_cmd(pd, mgos_pppos_cpin_cb, 0, "AT+CPIN?");//Request PIN need ?
+
+      if (mgos_sys_config_get_pppos_cfun_cycle()) {
+        add_cmd(pd, NULL, 0, "AT+CFUN=0"); /* Offline */
+      }
+
+//ADD INIT BG95
+      add_cmd(pd, NULL, 0, "AT+QCFG=\"nwscanmode\",0,1");//Configure automatic searching of all Radio Access Technology (RAT) types, to include GSM (2G) and LTE (Cat M1)
+      add_cmd(pd, NULL, 0, "AT+QCFG=\"nwscanseq\",020103,1");//Configure the RAT search sequence in the following order: LTE Cat M1 -> GSM -> LTE Cat NB1
+      add_cmd(pd, NULL, 0, "AT+QCFG=\"band\",0,100002000000000F0E189F,10004200000000090E189F");//Configure the device to search all available frequency bands
+      add_cmd(pd, NULL, 0, "AT+QCFG=\"iotopmode\",0,1"); //Configure the modem to only use LTE Cat-M1, not NB-IoT
+//END INIT BG95-M3
+
+      add_cmd(pd, NULL, 0, "AT+%s=0", reg_cmd); // AT+CREG=0 Disable network registration unsolicited result code. You will need to manually check the network registration status.
       bool ok = false;
-      if (pd->cfg->last_oper != NULL && pd->try_cops) {
-        /* Try last used first, fall back to auto if unsuccessful. */
-        LOG(LL_INFO, ("Trying to connect to %s", pd->cfg->last_oper));
-        const char *comma = strchr(pd->cfg->last_oper, ',');
-        if (comma != NULL) {
-          add_cmd(pd, mgos_pppos_cops_set_cb, COPS_TIMEOUT,
-                  "AT+COPS=4,2,\"%.*s\"", (int) (comma - pd->cfg->last_oper),
-                  pd->cfg->last_oper);
-          ok = true;
-        }
-      }
+      // if (pd->cfg->last_oper != NULL && pd->try_cops) { //bg95 MODEM USE ALSO BAND TYPE, BETTER USE AUTOMATIC MODE
+      //   /* Try last used first, fall back to auto if unsuccessful. */
+      //   LOG(LL_INFO, ("Trying to connect to %s", pd->cfg->last_oper)); //Need to add technology, 0 GSM, 8 LTE-M, 9 NB
+      //   const char *comma = strchr(pd->cfg->last_oper, ',');
+      //   if (comma != NULL) {
+      //     add_cmd(pd, mgos_pppos_cops_set_cb, COPS_TIMEOUT,
+      //             "AT+COPS=4,2,\"%.*s\"", (int) (comma - pd->cfg->last_oper),
+      //             pd->cfg->last_oper);
+      //     ok = true;
+      //   }
+      // }
       if (!ok) {
         /* Auto mode */
         LOG(LL_INFO, ("Automatic operator selection"));
-        add_cmd(pd, NULL, COPS_AUTO_TIMEOUT, "AT+COPS=0");
+        add_cmd(pd, NULL, COPS_AUTO_TIMEOUT, "AT+COPS=0"); //Set the mobile network operator selection to automatic
       }
-      add_cmd(pd, mgos_pppos_creg_cb, 0, "AT+%s?", reg_cmd);
+      add_cmd(pd, NULL, 0, "AT+CGDCONT=1,\"IP\",\"%s\"", pd->cfg->apn);
+      add_cmd(pd, NULL, 0, "AT+CFUN=1"); /* Online */
+
+      add_cmd(pd, mgos_pppos_creg_cb, 0, "AT+%s?", reg_cmd); //AT+CREG? Check the network registration state AT+CEREG? for LTE !!!
       add_cmd(pd, NULL, 0, "AT+COPS=3,2"); /* Numeric operator format. */
-      add_cmd(pd, mgos_pppos_cops_cb, 0, "AT+COPS?");
+      add_cmd(pd, mgos_pppos_cops_cb, 0, "AT+COPS?"); //moze byc problem bo na koncu komendy doszla band technology
       add_cmd(pd, NULL, 0, "AT+COPS=3,0"); /* Long alphanumeric format. */
       add_cmd(pd, mgos_pppos_cops_cb, 0, "AT+COPS?");
       add_cmd(pd, mgos_pppos_csq_cb, 0, "AT+CSQ");
-      add_cmd(pd, NULL, 0, "AT+CGDCONT=1,\"IP\",\"%s\"", pd->cfg->apn);
-      add_cmd(pd, mgos_pppos_atd_cb, 0, "ATDT*99***1#");
+      
+      add_cmd(pd, mgos_pppos_atd_cb, 0, "AT+CGACT=1,1");//Activate the PDP (packet data protocol) context
+      //add_cmd(pd, mgos_pppos_atd_cb, 0, "ATDT*99***1#");
+
       mgos_pppos_set_state(pd, PPPOS_CMD);
       (void) apn;
       break;
